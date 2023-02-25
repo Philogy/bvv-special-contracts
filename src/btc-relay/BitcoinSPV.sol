@@ -11,6 +11,22 @@ contract BitcoinSPV {
 
     function addHeaders(bytes calldata _headerData) external {
         assembly {
+            function swapRound(inp, mask, shift) -> res {
+                res := or(shl(shift, and(inp, mask)), and(shr(shift, inp), mask))
+            }
+            function reverseWord(inp) -> res {
+                res := swapRound(inp, 0x00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff, 0x08)
+                res := swapRound(res, 0x0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff, 0x10)
+                res := swapRound(res, 0x00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff, 0x20)
+                res := swapRound(res, 0x0000000000000000ffffffffffffffff0000000000000000ffffffffffffffff, 0x40)
+                res := or(shr(0x80, res), shl(0x80, res))
+            }
+
+            function reverseSmall(inp) -> res {
+                res := swapRound(inp, 0x00ff00ff, 0x08)
+                res := or(shr(0x10, res), shl(0x10, res))
+            }
+
             let headersLen := _headerData.length
             if mod(headersLen, 0x50) {
                 mstore(0x00, 0x947d5a84)
@@ -24,20 +40,31 @@ contract BitcoinSPV {
             let totalRoots := sload(txRoots.slot)
             let txRootsStartSlot := add(txRootsValueSlot, totalRoots)
 
-            let hashesValid := 1
+            let headersValid := 1
             let lastHash := sload(lastBlockhash.slot)
             let totalHeaders := div(_headerData.length, 0x50)
             for { let i := 0 } lt(i, totalHeaders) { i := add(i, 1) } {
                 let headerStart := add(freeMem, mul(i, 0x50))
+
+                // Validate Hashchain
                 let prevBlockhash := mload(add(headerStart, 0x04))
                 pop(staticcall(gas(), 0x02, headerStart, 0x50, 0x00, 0x20))
-                hashesValid := and(hashesValid, eq(prevBlockhash, lastHash))
+                pop(staticcall(gas(), 0x02, 0x00, 0x20, 0x00, 0x20))
+                headersValid := and(headersValid, eq(prevBlockhash, lastHash))
                 lastHash := mload(0x00)
+
+                // Validate PoW Above Target
+                let nBits := and(reverseSmall(mload(add(headerStart, 44))), 0xff7fffff)
+                let target := shl(shl(3, sub(shr(24, nBits), 3)), and(nBits, 0xffffff))
+                let fh := reverseWord(lastHash)
+                headersValid := and(headersValid, iszero(gt(fh, target)))
+
+                // Store merkle roots
                 sstore(add(txRootsStartSlot, i), mload(add(headerStart, 0x24)))
             }
             sstore(txRoots.slot, add(totalRoots, totalHeaders))
 
-            if iszero(hashesValid) {
+            if iszero(headersValid) {
                 mstore(0x00, 0x34207b29)
                 revert(0x1c, 0x04)
             }
