@@ -27,7 +27,7 @@ contract BitcoinSPV {
             let hashesValid := 1
             let lastHash := sload(lastBlockhash.slot)
             let totalHeaders := div(_headerData.length, 0x50)
-            for { let i := 0 } lt(i, totalHeaders) { i:= add(i, 1)} {
+            for { let i := 0 } lt(i, totalHeaders) { i := add(i, 1) } {
                 let headerStart := add(freeMem, mul(i, 0x50))
                 let prevBlockhash := mload(add(headerStart, 0x04))
                 pop(staticcall(gas(), 0x02, headerStart, 0x50, 0x00, 0x20))
