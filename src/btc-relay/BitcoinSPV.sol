@@ -11,6 +11,7 @@ contract BitcoinSPV {
 
     function addHeaders(bytes calldata _headerData) external {
         assembly {
+            // Define utility functions
             function swapRound(inp, mask, shift) -> res {
                 res := or(shl(shift, and(inp, mask)), and(shr(shift, inp), mask))
             }
@@ -21,25 +22,29 @@ contract BitcoinSPV {
                 res := swapRound(res, 0x0000000000000000ffffffffffffffff0000000000000000ffffffffffffffff, 0x40)
                 res := or(shr(0x80, res), shl(0x80, res))
             }
-
             function reverseSmall(inp) -> res {
                 res := swapRound(inp, 0x00ff00ff, 0x08)
                 res := or(shr(0x10, res), shl(0x10, res))
             }
 
+            // Validate input data stream length.
             let headersLen := _headerData.length
             if mod(headersLen, 0x50) {
                 mstore(0x00, 0x947d5a84)
                 revert(0x1c, 0x04)
             }
+
+            // Copy headers to memory.
             let freeMem := mload(0x40)
             calldatacopy(freeMem, _headerData.offset, headersLen)
 
+            // Derive slots and load length to be able to push new roots.
             mstore(0x00, txRoots.slot)
             let txRootsValueSlot := keccak256(0x00, 0x20)
             let totalRoots := sload(txRoots.slot)
             let txRootsStartSlot := add(txRootsValueSlot, totalRoots)
 
+            // Validate headers.
             let headersValid := 1
             let lastHash := sload(lastBlockhash.slot)
             let totalHeaders := div(_headerData.length, 0x50)
@@ -62,13 +67,14 @@ contract BitcoinSPV {
                 // Store merkle roots
                 sstore(add(txRootsStartSlot, i), mload(add(headerStart, 0x24)))
             }
-            sstore(txRoots.slot, add(totalRoots, totalHeaders))
-
             if iszero(headersValid) {
                 mstore(0x00, 0x34207b29)
                 revert(0x1c, 0x04)
             }
 
+            // Update total `txRoots`.
+            sstore(txRoots.slot, add(totalRoots, totalHeaders))
+            // Update `lastBlockhash`.
             sstore(lastBlockhash.slot, lastHash)
         }
     }
