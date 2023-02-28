@@ -2,12 +2,16 @@
 pragma solidity 0.8.15;
 
 /// @author philogy <https://github.com/philogy>
-contract BitcoinSPV {
+contract BitcoinSPVSimple {
     error InvalidLength();
     error InvalidHeaderchain();
 
     bytes32[] internal txRoots;
     bytes32 public lastBlockhash;
+
+    constructor(bytes32 _startHash) {
+        lastBlockhash = _startHash;
+    }
 
     function addHeaders(bytes calldata _headerData) external {
         assembly {
@@ -48,8 +52,9 @@ contract BitcoinSPV {
             let headersValid := 1
             let lastHash := sload(lastBlockhash.slot)
             let totalHeaders := div(_headerData.length, 0x50)
+            let headerStart
             for { let i := 0 } lt(i, totalHeaders) { i := add(i, 1) } {
-                let headerStart := add(freeMem, mul(i, 0x50))
+                headerStart := add(freeMem, mul(i, 0x50))
 
                 // Validate Hashchain
                 let prevBlockhash := mload(add(headerStart, 0x04))
