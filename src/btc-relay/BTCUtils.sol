@@ -6,6 +6,7 @@ library BTCUtils {
     error NotSegwitTx();
     error InsufficientTxInputs();
     error InsufficientWitnessElements();
+    error UnrecognizedInscriptionFormat();
 
     function isValidMerkle(bytes32 _root, bytes32 _baseEl, uint256 _index, bytes32[] calldata _proofEls)
         internal
@@ -32,10 +33,10 @@ library BTCUtils {
         }
     }
 
-    function getWitnessScript(bytes calldata _witnessTx, uint256 _inIndex)
+    function getInscription(bytes calldata _witnessTx, uint256 _inIndex)
         internal
         pure
-        returns (bytes memory witnessScript)
+        returns (bytes memory inscription)
     {
         assembly {
             function getVarint(ptr) -> newPtr, length {
@@ -125,13 +126,71 @@ library BTCUtils {
             let witnessesToSkip := sub(witnessEls, 2)
             for { let i := 0 } lt(i, witnessesToSkip) { i := add(i, 1) } { ptr := varintSkip(ptr) }
 
-            witnessScript := mload(0x40)
             let witnessLen
             ptr, witnessLen := getVarint(ptr)
-            mstore(witnessScript, witnessLen)
-            let freeMem := add(witnessScript, 0x20)
-            calldatacopy(freeMem, add(ptr, 0x1f), witnessLen)
-            freeMem := and(add(freeMem, add(witnessLen, 0x1f)), 0xffffffffffffffe0)
+
+            // Load and copy witness data to memory
+            inscription := mload(0x40)
+            let insLength := 0
+
+            // Check inscription header is `OP_TRUE OP_FALSE OP_IF` (0x00)
+            ptr := add(ptr, 2)
+            if iszero(eq(and(calldataload(ptr), 0xffffff), 0x510063)) {
+                // `revert UnrecognizedInscriptionFormat()`
+                mstore(0x00, 0x01aeb1d4)
+                revert(0x1c, 0x04)
+            }
+
+            // Position ptr to read OP-byte + 4
+            ptr := add(ptr, 5)
+
+            let freeMem := add(inscription, 0x20)
+
+            for {} 1 {} {
+                let opLookahead := and(calldataload(ptr), 0xffffffffff)
+                let op := shr(0x20, opLookahead)
+                let skipForward
+                switch lt(sub(op, 1), 0x4e)
+                case 1 {
+                    // Push opcodes (PUSH{1-75}, PUSHDATA1, PUSHDATA2, PUSHDATA4)
+                    let pushLength
+                    switch op
+                    case 0x4c {
+                        // OP_PUSHDATA1
+                        pushLength := and(shr(0x18, opLookahead), 0xff)
+                        ptr := add(ptr, 2)
+                    }
+                    case 0x4d {
+                        // OP_PUSHDATA2
+                        pushLength := or(shl(8, byte(29, opLookahead)), byte(28, opLookahead))
+                        ptr := add(ptr, 3)
+                    }
+                    case 0x4e {
+                        // OP_PUSHDATA4
+                        pushLength := and(opLookahead, 0xffffffff)
+                        pushLength := or(shl(8, and(pushLength, 0x00ff00ff)), and(shr(8, pushLength), 0x00ff00ff))
+                        pushLength := and(or(shr(0x10, pushLength), shl(0x10, pushLength)), 0xffffffff)
+                        ptr := add(ptr, 5)
+                    }
+                    default {
+                        // OP_PUSH{1-75}
+                        pushLength := op
+                        ptr := add(ptr, 1)
+                    }
+
+                    calldatacopy(freeMem, add(ptr, 0x1b), pushLength)
+                    ptr := add(ptr, pushLength)
+                    freeMem := add(freeMem, pushLength)
+                    insLength := add(insLength, pushLength)
+                }
+                default {
+                    ptr := add(ptr, 1)
+                    if iszero(sub(op, 0x68)) { break }
+                }
+            }
+
+            mstore(inscription, insLength)
+            freeMem := and(add(freeMem, add(insLength, 0x1f)), 0xffffffffffffffe0)
             mstore(0x40, freeMem)
         }
     }
